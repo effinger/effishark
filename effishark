@@ -9,7 +9,9 @@ import logging
 import sys
 import argparse
 
-INTERNAL_NETWORKS = ["192.168.", "10.10.", "255.255.255.", "224.0.0."]
+
+# List of networks to ignore as destinations
+INGORE_NETWORKS = ["192.168.", "10.10.", "255.255.255.", "224.0.0."]
 logging.basicConfig(level=logging.INFO)
 #logging.basicConfig(filename='shark.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
 
@@ -87,10 +89,8 @@ class CaptureTool:
         tstamp = time.strftime("%Y-%m-%d-%H:%M:%S")
         start_time = int(time.time())
     
-        # logging.debug("Starting capture...")
         self.shark = pyshark.LiveCapture(interface=self.interface)
         for raw_packet in self.shark.sniff_continuously():
-          # if 'eth' in raw_packet: logging.debug("New Packet: %s"  %(raw_packet.eth.src))
           if (int(time.time()) - start_time > self.buffer):
             break
 
@@ -113,9 +113,9 @@ class Conversation:
   ignore = False
 
   def __init__(self, packet):
-    global INTERNAL_NETWORKS
+    global INGORE_NETWORKS
 
-    # Check if this is an IP packet if it has source and destination MAC addresses
+    # Check if this is an IP packet and if it has source and destination MAC addresses
     valid_packet = ('ip' in packet and 'eth' in packet 
                     and ('tcp' in packet or 'udp' in packet) 
                     and packet.eth.src and packet.eth.dst)
@@ -128,9 +128,9 @@ class Conversation:
     self.dst_ip = packet.ip.dst.lower()
     self.dst_port = packet.tcp.dstport if 'tcp' in packet else packet.udp.dstport
     
-    self.outgoing = self.src_ip.startswith(tuple(INTERNAL_NETWORKS))
-    # Ignore incoming traffic and traffic which stays in the internal network
-    if (not self.outgoing or self.dst_ip.startswith(tuple(INTERNAL_NETWORKS))):
+    self.outgoing = self.src_ip.startswith(tuple(INGORE_NETWORKS))
+    # Ignore incoming traffic and traffic which stays within the internal network
+    if (not self.outgoing or self.dst_ip.startswith(tuple(INGORE_NETWORKS))):
       self.ignore = True
       return
 
