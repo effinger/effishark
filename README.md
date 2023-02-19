@@ -4,6 +4,14 @@
 
 If you want to keep a log of which of your devices may have been involved in suspicious outbound activities, effishark will keep a very lean log of all conversions. Every minute it will track all outbound connections with the respective source MAC address, the destination IP and the PORT. This should be the minimal information needed to identify, from which device some suspicious activity started (e.g. lots of SMTP spamming, connecting to a blacklisted IP, etc.).
 
+## Motivation
+
+Effinger.ch is a community-led coworking space in Bern, Switzerland. A few weeks ago our ISP swisscom.ch started to turn our network off without further warning. After calling them, they mentioned, that there was «malicious traffic» originating from our network. The only detail they would provide to us, was a few timestamps "Today at 08:03, 08:05 and 08:11" and they were referring to «Spamming». As this has happened a few times already now, we wanted to capture traffic in order to find out, from which device this traffic is originating. We are pretty sure, that the device's owner is not acting maliciously, but there might be some malware installed on a device.
+
+After installing wireshark on a Raspberry Pi, we realized that we'd capture tons of data in a very short time, even if not capturing packet content with the `-s` flag. Analyzing this data also became quite slow, so we started looking for a lightweight way to capture only «conversations» with minimal private data associated.
+
+Effishark uses PyShark to capture network traffic and periodically (60 seconds per default) store a list of all conversations seen during this time buffer. Only outbound traffic is recorded, and only the originating MAC address and the desination IP and port are saved. There's a simple way to query the data and periodically clean the conversation log.
+
 ## Installation
 
 We installed EffiShark on a Raspberry Pi 4 with a 32GB SD card, which should be sufficient to capture a few days worth of traffic.
@@ -62,6 +70,10 @@ If you like to regularly delete old conversations (a good practice to minimize p
   # Run at midnight and clean effishark conversations older than 7 days
   0 0 * * * /path/to/effishark --clean 7
 ```
+
+## License
+
+This project is licensed under the terms of the MIT license.
 
 ## Caveats
 
