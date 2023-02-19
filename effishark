@@ -10,7 +10,7 @@ import sys
 import argparse
 
 INTERNAL_NETWORKS = ["192.168.", "10.10.", "255.255.255.", "224.0.0."]
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 #logging.basicConfig(filename='shark.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
 
 SQL_DB_CREATE_DEVICES = """
@@ -180,8 +180,10 @@ class DbDumper:
 
 def parse_arguments():
   parser = argparse.ArgumentParser()
-  parser.add_argument("-f", "--file", default="~/shark.db",
-                      help="Path to the sqlite database file")
+  path = os.path.dirname(os.path.realpath(__file__))
+  default_file = os.path.join(path, "shark.db")
+  parser.add_argument("-f", "--file", default=default_file,
+                      help="Path to the sqlite database file. Default: ./shark.db")
   parser.add_argument("-b", "--buffer", default=60, type=int,
                       help="How many seconds of traffic to aggregate")
   parser.add_argument("-i", "--interface", default="eth0",
