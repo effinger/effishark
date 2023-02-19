@@ -1,0 +1,25 @@
+# This goes into /etc/systemd/system/effishark.service
+#  
+# sudo cp ./effishark.service /etc/systemd/system/
+# sudo systemctl daemon-reload
+# sudo systemctl enable effishark
+# sudo service effishark start
+
+[Unit]
+Description=Effishark Service
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=pi
+ExecStartPre=
+ExecStart=/home/pi/effishark
+ExecStartPost
+ExecStop=
+ExecReload=
+
+[Install]
+WantedBy=multi-user.target

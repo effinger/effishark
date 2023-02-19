@@ -1,0 +1,200 @@
+#!/usr/bin/env python
+
+import pyshark
+import sqlite3
+import time
+from datetime import datetime, timedelta
+import os
+import logging
+import sys
+import argparse
+
+INTERNAL_NETWORKS = ["192.168.", "10.10.", "255.255.255.", "224.0.0."]
+logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(filename='shark.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
+
+SQL_DB_CREATE_DEVICES = """
+  CREATE TABLE IF NOT EXISTS devices (
+    mac STRING UNIQUE,
+    id INTEGER PRIMARY KEY
+  );
+"""
+SQL_DB_CREATE_CONVERSATIONS = """
+  CREATE TABLE IF NOT EXISTS conversations (
+    tstamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    device_id INTEGER,
+    destination STRING,
+    port INTEGER
+  );
+"""
+
+class EffiShark:
+  def __init__(self, args):
+    self.db_file = args.file
+    if args.clean is not None:
+      self.clean(args.clean)
+    elif args.after or args.before or args.device:
+      self.query(args.after, args.before, args.device)
+    else:
+      self.dumper = DbDumper(self.db_file)
+      self.capture_tool = CaptureTool(args.interface, args.buffer, self.dumper)
+      self.run()
+
+  def run(self):
+    self.capture_tool.capture()
+
+  def query(self, after, before, device):
+    db = self.connect()
+    sql = "SELECT DATETIME(tstamp, 'localtime'), mac, destination, port FROM conversations "
+    sql += "JOIN devices on devices.id = conversations.device_id WHERE 1 "
+    if after:
+      sql += "AND tstamp >= '%s' " %(after)
+    if before:
+      sql += "AND tstamp <= '%s' " %(before)
+    if device:
+      sql += "AND mac = '%s' " %(device)
+    logging.debug(sql)
+    for row in db.execute(sql):
+      print("%s %s -> %s:%s" %row)
+
+  def clean(self, days):
+    db = self.connect()
+    time = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:00")
+    logging.info("Deleting all conversations from before %s" %time)
+    sql = "DELETE FROM conversations WHERE DATETIME(tstamp, 'localtime') < '%s'" %(time)
+    logging.debug(sql)
+    db.execute(sql)
+    db.commit()
+
+  def connect(self):
+    self.db = sqlite3.connect(self.db_file)
+    return self.db
+  
+
+class CaptureTool:
+  def __init__(self, interface, buffer, dumper):
+    self.interface = interface
+    self.buffer = buffer
+    self.dumper = dumper
+  
+  def capture(self):
+    logging.info("Start capturing on %s" %(self.interface))
+    
+    # Capture packets for x seconds and condense them into conversations
+    while True:
+      try: 
+        conversations = []
+        tstamp = time.strftime("%Y-%m-%d-%H:%M:%S")
+        start_time = int(time.time())
+    
+        # logging.debug("Starting capture...")
+        self.shark = pyshark.LiveCapture(interface=self.interface)
+        for raw_packet in self.shark.sniff_continuously():
+          # if 'eth' in raw_packet: logging.debug("New Packet: %s"  %(raw_packet.eth.src))
+          if (int(time.time()) - start_time > self.buffer):
+            break
+
+          conversation = Conversation(raw_packet)
+          if not conversation.ignore and conversation not in conversations:
+            conversations.append(conversation)
+      except KeyboardInterrupt:
+        sys.exit()
+      except Exception as err:
+        print("----- ERROR: %s" %(err))
+      finally: 
+        self.dumper.dump(tstamp, conversations)
+
+class Conversation:
+  src_ip = None
+  src_mac = None
+  dst_ip = None
+  dst_port = None
+  outgoing = None
+  ignore = False
+
+  def __init__(self, packet):
+    global INTERNAL_NETWORKS
+
+    # Check if this is an IP packet if it has source and destination MAC addresses
+    valid_packet = ('ip' in packet and 'eth' in packet 
+                    and ('tcp' in packet or 'udp' in packet) 
+                    and packet.eth.src and packet.eth.dst)
+    if not valid_packet:
+      self.ignore = True
+      return
+        
+    self.src_mac = packet.eth.src.lower()
+    self.src_ip = packet.ip.src.lower()
+    self.dst_ip = packet.ip.dst.lower()
+    self.dst_port = packet.tcp.dstport if 'tcp' in packet else packet.udp.dstport
+    
+    self.outgoing = self.src_ip.startswith(tuple(INTERNAL_NETWORKS))
+    # Ignore incoming traffic and traffic which stays in the internal network
+    if (not self.outgoing or self.dst_ip.startswith(tuple(INTERNAL_NETWORKS))):
+      self.ignore = True
+      return
+
+  def __hash__(self):
+    return hash((self.src_ip, self.src_mac, self.dst_ip, self.dst_port))
+  
+  def __eq__(self, other):
+    if self is None: return other is None
+    if other is None or not isinstance(other, Conversation): return False
+    return (self.src_ip == other.src_ip and self.src_mac == other.src_mac and 
+            self.dst_ip == other.dst_ip and self.dst_port == other.dst_port)
+
+  def __ne__(self, other):
+    return not self.__eq__(other)
+
+class DbDumper:
+  def __init__(self, db_file):
+    self.db_file = db_file
+    self.connect()
+    self.create()
+
+  def connect(self):
+    logging.info("Opening database %s" %(self.db_file))
+    self.db = sqlite3.connect(self.db_file)
+
+  def create(self):
+    global SQL_DB_CREATE_DEVICES, SQL_DB_CREATE_CONVERSATIONS
+    cursor = self.db.cursor()
+    cursor.execute(SQL_DB_CREATE_DEVICES)
+    cursor.execute(SQL_DB_CREATE_CONVERSATIONS)
+
+  def dump(self, tstamp, conversations):
+    cursor = self.db.cursor()
+    for conv in conversations:
+      sql = "INSERT OR IGNORE INTO devices(mac) VALUES(?)"
+      cursor.execute(sql, [conv.src_mac])
+      self.db.commit()
+      sql = "SELECT id from devices WHERE mac=?"
+      cursor.execute(sql, [conv.src_mac])
+      row = cursor.fetchone()
+      device_id = row[0]
+      sql = "INSERT INTO conversations(device_id, destination, port) VALUES (?, ?, ?)"
+      cursor.execute(sql, [device_id, conv.dst_ip, conv.dst_port])
+      self.db.commit()
+      
+      logging.debug("%s %s/%s <-> %s:%s\n" %(tstamp, device_id, conv.src_mac, conv.dst_ip, conv.dst_port))
+
+def parse_arguments():
+  parser = argparse.ArgumentParser()
+  parser.add_argument("-f", "--file", default="~/shark.db",
+                      help="Path to the sqlite database file")
+  parser.add_argument("-b", "--buffer", default=60, type=int,
+                      help="How many seconds of traffic to aggregate")
+  parser.add_argument("-i", "--interface", default="eth0",
+                      help="Network interface (for Macs: 'en0')")
+  parser.add_argument("--after",
+                      help="Do not capture, only display conversations starting after 'yyyy-mm-dd hh:mm'")
+  parser.add_argument("--before",
+                      help="Do not capture, only display conversations before 'yyyy-mm-dd hh:mm'")
+  parser.add_argument("--device",
+                      help="Do not capture, only display conversations from 'mac:add:ress'")
+  parser.add_argument("--clean", type=int,
+                      help="Remove all conversations which are older than DAYS days")
+  return parser.parse_args()
+
+args = parse_arguments()
+effi = EffiShark(args)
