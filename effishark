@@ -12,8 +12,11 @@ import argparse
 
 # List of networks to ignore as destinations
 INGORE_NETWORKS = ["192.168.", "10.10.", "255.255.255.", "224.0.0."]
-logging.basicConfig(level=logging.INFO)
+
+
+# Logging Configuration
 #logging.basicConfig(filename='shark.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 
 SQL_DB_CREATE_DEVICES = """
   CREATE TABLE IF NOT EXISTS devices (
@@ -35,8 +38,8 @@ class EffiShark:
     self.db_file = args.file
     if args.clean is not None:
       self.clean(args.clean)
-    elif args.after or args.before or args.device:
-      self.query(args.after, args.before, args.device)
+    elif args.after or args.before or args.device or args.ports:
+      self.query(args.after, args.before, args.device, args.ports)
     else:
       self.dumper = DbDumper(self.db_file)
       self.capture_tool = CaptureTool(args.interface, args.buffer, self.dumper)
@@ -45,7 +48,7 @@ class EffiShark:
   def run(self):
     self.capture_tool.capture()
 
-  def query(self, after, before, device):
+  def query(self, after, before, device, ports):
     db = self.connect()
     sql = "SELECT DATETIME(tstamp, 'localtime'), mac, destination, port FROM conversations "
     sql += "JOIN devices on devices.id = conversations.device_id WHERE 1 "
@@ -55,6 +58,8 @@ class EffiShark:
       sql += "AND tstamp <= '%s' " %(before)
     if device:
       sql += "AND mac = '%s' " %(device)
+    if ports:
+      sql += "AND port IN (%s) " %(ports)
     logging.debug(sql)
     for row in db.execute(sql):
       print("%s %s -> %s:%s" %row)
@@ -192,6 +197,8 @@ def parse_arguments():
                       help="Do not capture, only display conversations starting after 'yyyy-mm-dd hh:mm'")
   parser.add_argument("--before",
                       help="Do not capture, only display conversations before 'yyyy-mm-dd hh:mm'")
+  parser.add_argument("--ports",
+                      help="Do not capture, only display conversations matching one of the ports, e.g. '25,110'")
   parser.add_argument("--device",
                       help="Do not capture, only display conversations from 'mac:add:ress'")
   parser.add_argument("--clean", type=int,
